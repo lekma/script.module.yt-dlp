@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="script.module.yt-dlp"
        name="yt-dlp"
-       version="2023.03.04-3"
+       version="2023.03.04-4"
        provider-name="yt-dlp contributors">
 
     <requires>
