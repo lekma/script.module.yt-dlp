@@ -258,7 +258,7 @@ def build_innertube_clients():
     THIRD_PARTY = {
         'embedUrl': 'https://www.youtube.com/',  # Can be any valid URL
     }
-    BASE_CLIENTS = ('android', 'web', 'tv', 'ios', 'mweb')
+    BASE_CLIENTS = ('ios', 'android', 'web', 'tv', 'mweb')
     priority = qualities(BASE_CLIENTS[::-1])
 
     for client, ytcfg in tuple(INNERTUBE_CLIENTS.items()):
@@ -811,7 +811,7 @@ class YoutubeBaseInfoExtractor(InfoExtractor):
             'BADGE_STYLE_TYPE_PREMIUM': BadgeType.AVAILABILITY_PREMIUM,
             'BADGE_STYLE_TYPE_LIVE_NOW': BadgeType.LIVE_NOW,
             'BADGE_STYLE_TYPE_VERIFIED': BadgeType.VERIFIED,
-            'BADGE_STYLE_TYPE_VERIFIED_ARTIST': BadgeType.VERIFIED
+            'BADGE_STYLE_TYPE_VERIFIED_ARTIST': BadgeType.VERIFIED,
         }
 
         label_map = {
@@ -821,7 +821,7 @@ class YoutubeBaseInfoExtractor(InfoExtractor):
             'live': BadgeType.LIVE_NOW,
             'premium': BadgeType.AVAILABILITY_PREMIUM,
             'verified': BadgeType.VERIFIED,
-            'official artist channel': BadgeType.VERIFIED
+            'official artist channel': BadgeType.VERIFIED,
         }
 
         badges = []
@@ -3140,7 +3140,7 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             return funcname
 
         return json.loads(js_to_json(self._search_regex(
-            rf'var {re.escape(funcname)}\s*=\s*(\[.+?\]);', jscode,
+            rf'var {re.escape(funcname)}\s*=\s*(\[.+?\])[,;]', jscode,
             f'Initial JS player n function list ({funcname}.{idx})')))[int(idx)]
 
     def _extract_n_function_code(self, video_id, player_url):
@@ -3356,7 +3356,7 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             info['author_is_uploader'] = author_is_uploader
 
         comment_abr = traverse_obj(
-            comment_renderer, ('actionsButtons', 'commentActionButtonsRenderer'), expected_type=dict)
+            comment_renderer, ('actionButtons', 'commentActionButtonsRenderer'), expected_type=dict)
         if comment_abr is not None:
             info['is_favorited'] = 'creatorHeart' in comment_abr
 
@@ -3599,7 +3599,7 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
     def _is_unplayable(player_response):
         return traverse_obj(player_response, ('playabilityStatus', 'status')) == 'UNPLAYABLE'
 
-    _STORY_PLAYER_PARAMS = '8AEB'
+    _PLAYER_PARAMS = 'CgIQBg=='
 
     def _extract_player_response(self, client, video_id, master_ytcfg, player_ytcfg, player_url, initial_pr, smuggled_data):
 
@@ -3613,7 +3613,7 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             'videoId': video_id,
         }
         if smuggled_data.get('is_story') or _split_innertube_client(client)[0] == 'android':
-            yt_query['params'] = self._STORY_PLAYER_PARAMS
+            yt_query['params'] = self._PLAYER_PARAMS
 
         yt_query.update(self._generate_player_context(sts))
         return self._extract_response(
@@ -3625,7 +3625,7 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
 
     def _get_requested_clients(self, url, smuggled_data):
         requested_clients = []
-        default = ['android', 'web']
+        default = ['ios', 'android', 'web']
         allowed_clients = sorted(
             (client for client in INNERTUBE_CLIENTS.keys() if client[:1] != '_'),
             key=lambda client: INNERTUBE_CLIENTS[client]['priority'], reverse=True)
@@ -3848,6 +3848,8 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                     f'{video_id}: Some formats are possibly damaged. They will be deprioritized', only_once=True)
 
             client_name = fmt.get(STREAMING_DATA_CLIENT_NAME)
+            name = fmt.get('qualityLabel') or quality.replace('audio_quality_', '') or ''
+            fps = int_or_none(fmt.get('fps')) or 0
             dct = {
                 'asr': int_or_none(fmt.get('audioSampleRate')),
                 'filesize': int_or_none(fmt.get('contentLength')),
@@ -3855,16 +3857,16 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                 'format_note': join_nonempty(
                     join_nonempty(audio_track.get('displayName'),
                                   language_preference > 0 and ' (default)', delim=''),
-                    fmt.get('qualityLabel') or quality.replace('audio_quality_', ''),
-                    fmt.get('isDrc') and 'DRC',
+                    name, fmt.get('isDrc') and 'DRC',
                     try_get(fmt, lambda x: x['projectionType'].replace('RECTANGULAR', '').lower()),
                     try_get(fmt, lambda x: x['spatialAudioType'].replace('SPATIAL_AUDIO_TYPE_', '').lower()),
                     throttled and 'THROTTLED', is_damaged and 'DAMAGED',
                     (self.get_param('verbose') or all_formats) and client_name,
                     delim=', '),
                 # Format 22 is likely to be damaged. See https://github.com/yt-dlp/yt-dlp/issues/3372
-                'source_preference': -10 if throttled else -5 if itag == '22' else -1,
-                'fps': int_or_none(fmt.get('fps')) or None,
+                'source_preference': ((-10 if throttled else -5 if itag == '22' else -1)
+                                      + (100 if 'Premium' in name else 0)),
+                'fps': fps if fps > 1 else None,  # For some formats, fps is wrongly returned as 1
                 'audio_channels': fmt.get('audioChannels'),
                 'height': height,
                 'quality': q(quality) - bool(fmt.get('isDrc')) / 2,
@@ -3930,11 +3932,17 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             elif itag:
                 f['format_id'] = itag
 
+            if itag in ('616', '235'):
+                f['format_note'] = join_nonempty(f.get('format_note'), 'Premium', delim=' ')
+                f['source_preference'] = (f.get('source_preference') or -1) + 100
+
             f['quality'] = q(itag_qualities.get(try_get(f, lambda f: f['format_id'].split('-')[0]), -1))
             if f['quality'] == -1 and f.get('height'):
                 f['quality'] = q(res_qualities[min(res_qualities, key=lambda x: abs(x - f['height']))])
-            if self.get_param('verbose'):
+            if self.get_param('verbose') or all_formats:
                 f['format_note'] = join_nonempty(f.get('format_note'), client_name, delim=', ')
+            if f.get('fps') and f['fps'] <= 1:
+                del f['fps']
             return True
 
         subtitles = {}
@@ -4007,8 +4015,8 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
         webpage = None
         if 'webpage' not in self._configuration_arg('player_skip'):
             query = {'bpctr': '9999999999', 'has_verified': '1'}
-            if smuggled_data.get('is_story'):
-                query['pp'] = self._STORY_PLAYER_PARAMS
+            if smuggled_data.get('is_story'):  # XXX: Deprecated
+                query['pp'] = self._PLAYER_PARAMS
             webpage = self._download_webpage(
                 webpage_url, video_id, fatal=False, query=query)
 
@@ -4338,15 +4346,21 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                         info[d_k] = parse_duration(query[k][0])
 
         # Youtube Music Auto-generated description
-        if video_description:
+        if (video_description or '').strip().endswith('\nAuto-generated by YouTube.'):
+            # XXX: Causes catastrophic backtracking if description has "·"
+            # E.g. https://www.youtube.com/watch?v=DoPaAxMQoiI
+            # Simulating atomic groups:  (?P<a>[^xy]+)x  =>  (?=(?P<a>[^xy]+))(?P=a)x
+            # reduces it, but does not fully fix it. https://regex101.com/r/8Ssf2h/2
             mobj = re.search(
                 r'''(?xs)
-                    (?P<track>[^·\n]+)·(?P<artist>[^\n]+)\n+
-                    (?P<album>[^\n]+)
+                    (?=(?P<track>[^\n·]+))(?P=track)·
+                    (?=(?P<artist>[^\n]+))(?P=artist)\n+
+                    (?=(?P<album>[^\n]+))(?P=album)\n
                     (?:.+?℗\s*(?P<release_year>\d{4})(?!\d))?
                     (?:.+?Released on\s*:\s*(?P<release_date>\d{4}-\d{2}-\d{2}))?
-                    (.+?\nArtist\s*:\s*(?P<clean_artist>[^\n]+))?
-                    .+\nAuto-generated\ by\ YouTube\.\s*$
+                    (.+?\nArtist\s*:\s*
+                        (?=(?P<clean_artist>[^\n]+))(?P=clean_artist)\n
+                    )?.+\nAuto-generated\ by\ YouTube\.\s*$
                 ''', video_description)
             if mobj:
                 release_year = mobj.group('release_year')
@@ -4527,7 +4541,7 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             and 'no-youtube-prefer-utc-upload-date' not in self.get_param('compat_opts', [])
         ):
             upload_date = strftime_or_none(
-                self._parse_time_text(self._get_text(vpir, 'dateText')), '%Y%m%d') or upload_date
+                self._parse_time_text(self._get_text(vpir, 'dateText'))) or upload_date
         info['upload_date'] = upload_date
 
         for s_k, d_k in [('artist', 'creator'), ('track', 'alt_title')]:
@@ -5067,7 +5081,7 @@ class YoutubeTabBaseInfoExtractor(YoutubeBaseInfoExtractor):
         last_updated_unix = self._parse_time_text(
             self._get_text(playlist_stats, 2)  # deprecated, remove when old layout discontinued
             or self._get_text(playlist_header_renderer, ('byline', 1, 'playlistBylineRenderer', 'text')))
-        info['modified_date'] = strftime_or_none(last_updated_unix, '%Y%m%d')
+        info['modified_date'] = strftime_or_none(last_updated_unix)
 
         info['view_count'] = self._get_count(playlist_stats, 1)
         if info['view_count'] is None:  # 0 is allowed
