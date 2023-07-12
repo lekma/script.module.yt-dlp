@@ -15,7 +15,6 @@ from .youtube import (  # Youtube is moved to the top to improve performance
     YoutubeSearchURLIE,
     YoutubeMusicSearchURLIE,
     YoutubeSubscriptionsIE,
-    YoutubeStoriesIE,
     YoutubeTruncatedIDIE,
     YoutubeTruncatedURLIE,
     YoutubeYtBeIE,
@@ -215,6 +214,7 @@ from .bild import BildIE
 from .bilibili import (
     BiliBiliIE,
     BiliBiliBangumiIE,
+    BiliBiliBangumiSeasonIE,
     BiliBiliBangumiMediaIE,
     BiliBiliSearchIE,
     BilibiliCategoryIE,
@@ -1531,6 +1531,7 @@ from .prx import (
 )
 from .puls4 import Puls4IE
 from .pyvideo import PyvideoIE
+from .qdance import QDanceIE
 from .qingting import QingTingIE
 from .qqmusic import (
     QQMusicIE,
@@ -1854,6 +1855,10 @@ from .srgssr import (
     SRGSSRPlayIE,
 )
 from .srmediathek import SRMediathekIE
+from .stacommu import (
+    StacommuLiveIE,
+    StacommuVODIE,
+)
 from .stanfordoc import StanfordOpenClassroomIE
 from .startv import StarTVIE
 from .steam import (
@@ -2267,6 +2272,8 @@ from .vk import (
     VKIE,
     VKUserVideosIE,
     VKWallPostIE,
+    VKPlayIE,
+    VKPlayLiveIE,
 )
 from .vocaroo import VocarooIE
 from .vodlocker import VodlockerIE
