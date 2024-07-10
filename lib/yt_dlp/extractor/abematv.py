@@ -12,20 +12,21 @@ import urllib.parse
 import urllib.request
 import urllib.response
 import uuid
-from ..utils.networking import clean_proxies
+
 from .common import InfoExtractor
 from ..aes import aes_ecb_decrypt
 from ..utils import (
     ExtractorError,
+    OnDemandPagedList,
     bytes_to_intlist,
     decode_base_n,
     int_or_none,
     intlist_to_bytes,
-    OnDemandPagedList,
     time_seconds,
     traverse_obj,
     update_url_query,
 )
+from ..utils.networking import clean_proxies
 
 
 def add_opener(ydl, handler):  # FIXME: Create proper API in .networking
@@ -53,7 +54,7 @@ class AbemaLicenseHandler(urllib.request.BaseHandler):
         # the protocol that this should really handle is 'abematv-license://'
         # abematv_license_open is just a placeholder for development purposes
         # ref. https://github.com/python/cpython/blob/f4c03484da59049eb62a9bf7777b963e2267d187/Lib/urllib/request.py#L510
-        setattr(self, 'abematv-license_open', getattr(self, 'abematv_license_open'))
+        setattr(self, 'abematv-license_open', getattr(self, 'abematv_license_open', None))
         self.ie = ie
 
     def _get_videokey_from_ticket(self, ticket):
@@ -65,8 +66,8 @@ class AbemaLicenseHandler(urllib.request.BaseHandler):
             query={'t': media_token},
             data=json.dumps({
                 'kv': 'a',
-                'lt': ticket
-            }).encode('utf-8'),
+                'lt': ticket,
+            }).encode(),
             headers={
                 'Content-Type': 'application/json',
             })
@@ -76,7 +77,7 @@ class AbemaLicenseHandler(urllib.request.BaseHandler):
 
         h = hmac.new(
             binascii.unhexlify(self.HKEY),
-            (license_response['cid'] + self.ie._DEVICE_ID).encode('utf-8'),
+            (license_response['cid'] + self.ie._DEVICE_ID).encode(),
             digestmod=hashlib.sha256)
         enckey = bytes_to_intlist(h.digest())
 
@@ -92,6 +93,8 @@ class AbemaLicenseHandler(urllib.request.BaseHandler):
 
 
 class AbemaTVBaseIE(InfoExtractor):
+    _NETRC_MACHINE = 'abematv'
+
     _USERTOKEN = None
     _DEVICE_ID = None
     _MEDIATOKEN = None
@@ -100,11 +103,11 @@ class AbemaTVBaseIE(InfoExtractor):
 
     @classmethod
     def _generate_aks(cls, deviceid):
-        deviceid = deviceid.encode('utf-8')
+        deviceid = deviceid.encode()
         # add 1 hour and then drop minute and secs
         ts_1hour = int((time_seconds() // 3600 + 1) * 3600)
         time_struct = time.gmtime(ts_1hour)
-        ts_1hour_str = str(ts_1hour).encode('utf-8')
+        ts_1hour_str = str(ts_1hour).encode()
 
         tmp = None
 
@@ -116,7 +119,7 @@ class AbemaTVBaseIE(InfoExtractor):
 
         def mix_tmp(count):
             nonlocal tmp
-            for i in range(count):
+            for _ in range(count):
                 mix_once(tmp)
 
         def mix_twist(nonce):
@@ -136,11 +139,15 @@ class AbemaTVBaseIE(InfoExtractor):
         if self._USERTOKEN:
             return self._USERTOKEN
 
+        add_opener(self._downloader, AbemaLicenseHandler(self))
+
         username, _ = self._get_login_info()
-        AbemaTVBaseIE._USERTOKEN = username and self.cache.load(self._NETRC_MACHINE, username)
+        auth_cache = username and self.cache.load(self._NETRC_MACHINE, username, min_ver='2024.01.19')
+        AbemaTVBaseIE._USERTOKEN = auth_cache and auth_cache.get('usertoken')
         if AbemaTVBaseIE._USERTOKEN:
             # try authentication with locally stored token
             try:
+                AbemaTVBaseIE._DEVICE_ID = auth_cache.get('device_id')
                 self._get_media_token(True)
                 return
             except ExtractorError as e:
@@ -153,13 +160,12 @@ class AbemaTVBaseIE(InfoExtractor):
             data=json.dumps({
                 'deviceId': self._DEVICE_ID,
                 'applicationKeySecret': aks,
-            }).encode('utf-8'),
+            }).encode(),
             headers={
                 'Content-Type': 'application/json',
             })
         AbemaTVBaseIE._USERTOKEN = user_data['token']
 
-        add_opener(self._downloader, AbemaLicenseHandler(self))
         return self._USERTOKEN
 
     def _get_media_token(self, invalidate=False, to_show=True):
@@ -174,12 +180,43 @@ class AbemaTVBaseIE(InfoExtractor):
                 'osLang': 'ja_JP',
                 'osTimezone': 'Asia/Tokyo',
                 'appId': 'tv.abema',
-                'appVersion': '3.27.1'
+                'appVersion': '3.27.1',
             }, headers={
                 'Authorization': f'bearer {self._get_device_token()}',
             })['token']
 
         return self._MEDIATOKEN
+
+    def _perform_login(self, username, password):
+        self._get_device_token()
+        if self.cache.load(self._NETRC_MACHINE, username, min_ver='2024.01.19') and self._get_media_token():
+            self.write_debug('Skipping logging in')
+            return
+
+        if '@' in username:  # don't strictly check if it's email address or not
+            ep, method = 'user/email', 'email'
+        else:
+            ep, method = 'oneTimePassword', 'userId'
+
+        login_response = self._download_json(
+            f'https://api.abema.io/v1/auth/{ep}', None, note='Logging in',
+            data=json.dumps({
+                method: username,
+                'password': password,
+            }).encode(), headers={
+                'Authorization': f'bearer {self._get_device_token()}',
+                'Origin': 'https://abema.tv',
+                'Referer': 'https://abema.tv/',
+                'Content-Type': 'application/json',
+            })
+
+        AbemaTVBaseIE._USERTOKEN = login_response['token']
+        self._get_media_token(True)
+        auth_cache = {
+            'device_id': AbemaTVBaseIE._DEVICE_ID,
+            'usertoken': AbemaTVBaseIE._USERTOKEN,
+        }
+        self.cache.store(self._NETRC_MACHINE, username, auth_cache)
 
     def _call_api(self, endpoint, video_id, query=None, note='Downloading JSON metadata'):
         return self._download_json(
@@ -204,7 +241,6 @@ class AbemaTVBaseIE(InfoExtractor):
 
 class AbemaTVIE(AbemaTVBaseIE):
     _VALID_URL = r'https?://abema\.tv/(?P<type>now-on-air|video/episode|channels/.+?/slots)/(?P<id>[^?/]+)'
-    _NETRC_MACHINE = 'abematv'
     _TESTS = [{
         'url': 'https://abema.tv/video/episode/194-25_s2_p1',
         'info_dict': {
@@ -224,7 +260,7 @@ class AbemaTVIE(AbemaTVBaseIE):
             'title': 'ゆるキャン△ SEASON２ 全話一挙【無料ビデオ72時間】',
             'series': 'ゆるキャン△ SEASON２',
             'episode': 'ゆるキャン△ SEASON２ 全話一挙【無料ビデオ72時間】',
-            'series_number': 2,
+            'season_number': 2,
             'episode_number': 1,
             'description': 'md5:9c5a3172ae763278f9303922f0ea5b17',
         },
@@ -252,33 +288,6 @@ class AbemaTVIE(AbemaTVBaseIE):
         'skip': 'Not supported until yt-dlp implements native live downloader OR AbemaTV can start a local HTTP server',
     }]
     _TIMETABLE = None
-
-    def _perform_login(self, username, password):
-        self._get_device_token()
-        if self.cache.load(self._NETRC_MACHINE, username) and self._get_media_token():
-            self.write_debug('Skipping logging in')
-            return
-
-        if '@' in username:  # don't strictly check if it's email address or not
-            ep, method = 'user/email', 'email'
-        else:
-            ep, method = 'oneTimePassword', 'userId'
-
-        login_response = self._download_json(
-            f'https://api.abema.io/v1/auth/{ep}', None, note='Logging in',
-            data=json.dumps({
-                method: username,
-                'password': password
-            }).encode('utf-8'), headers={
-                'Authorization': f'bearer {self._get_device_token()}',
-                'Origin': 'https://abema.tv',
-                'Referer': 'https://abema.tv/',
-                'Content-Type': 'application/json',
-            })
-
-        AbemaTVBaseIE._USERTOKEN = login_response['token']
-        self._get_media_token(True)
-        self.cache.store(self._NETRC_MACHINE, username, AbemaTVBaseIE._USERTOKEN)
 
     def _real_extract(self, url):
         # starting download using infojson from this extractor is undefined behavior,
@@ -335,7 +344,7 @@ class AbemaTVIE(AbemaTVBaseIE):
 
         description = self._html_search_regex(
             (r'<p\s+class="com-video-EpisodeDetailsBlock__content"><span\s+class=".+?">(.+?)</span></p><div',
-             r'<span\s+class=".+?SlotSummary.+?">(.+?)</span></div><div',),
+             r'<span\s+class=".+?SlotSummary.+?">(.+?)</span></div><div'),
             webpage, 'description', default=None, group=1)
         if not description:
             og_desc = self._html_search_meta(
@@ -359,6 +368,7 @@ class AbemaTVIE(AbemaTVBaseIE):
             info['episode_number'] = epis if epis < 2000 else None
 
         is_live, m3u8_url = False, None
+        availability = 'public'
         if video_type == 'now-on-air':
             is_live = True
             channel_url = 'https://api.abema.io/v1/channels'
@@ -380,6 +390,7 @@ class AbemaTVIE(AbemaTVBaseIE):
             if 3 not in ondemand_types:
                 # cannot acquire decryption key for these streams
                 self.report_warning('This is a premium-only stream')
+                availability = 'premium_only'
             info.update(traverse_obj(api_response, {
                 'series': ('series', 'title'),
                 'season': ('season', 'name'),
@@ -399,6 +410,7 @@ class AbemaTVIE(AbemaTVBaseIE):
                 headers=headers)
             if not traverse_obj(api_response, ('slot', 'flags', 'timeshiftFree'), default=False):
                 self.report_warning('This is a premium-only stream')
+                availability = 'premium_only'
 
             m3u8_url = f'https://vod-abematv.akamaized.net/slot/{video_id}/playlist.m3u8'
         else:
@@ -416,6 +428,7 @@ class AbemaTVIE(AbemaTVBaseIE):
             'description': description,
             'formats': formats,
             'is_live': is_live,
+            'availability': availability,
         })
         return info
 
