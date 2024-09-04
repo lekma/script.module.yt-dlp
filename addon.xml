@@ -16,9 +16,6 @@
         <license>Unlicense</license>
         <platform>all</platform>
         <source>https://github.com/yt-dlp/yt-dlp</source>
-        <assets>
-            <icon>icon.png</icon>
-        </assets>
     </extension>
 
 </addon>
