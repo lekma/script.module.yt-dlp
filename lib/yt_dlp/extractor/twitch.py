@@ -1041,7 +1041,7 @@ class TwitchStreamIE(TwitchBaseIE):
             timestamp = unified_timestamp(stream.get('createdAt'))
         except Exception:
             timestamp = None
-            
+
         sq_user = try_get(gql, lambda x: x[1]['data']['user'], dict) or {}
         uploader = sq_user.get('displayName')
         description = try_get(
