@@ -4273,7 +4273,6 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             key = (proto, f.get('language'))
             if not all_formats and key in itags[itag]:
                 return False
-            itags[itag].add(key)
 
             if f.get('source_preference') is None:
                 f['source_preference'] = -1
@@ -4286,6 +4285,8 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                     return False
                 f['format_note'] = join_nonempty(f.get('format_note'), 'MISSING POT', delim=' ')
                 f['source_preference'] -= 20
+
+            itags[itag].add(key)
 
             if itag and all_formats:
                 f['format_id'] = f'{itag}-{proto}'
