@@ -29,6 +29,7 @@ from ..compat import (
 from ..cookies import LenientSimpleCookie
 from ..downloader.f4m import get_base_url, remove_encrypted_media
 from ..downloader.hls import HlsFD
+from ..globals import plugin_ies_overrides
 from ..networking import HEADRequest, Request
 from ..networking.exceptions import (
     HTTPError,
@@ -2934,8 +2935,7 @@ class InfoExtractor:
                             segment_duration = None
                             if 'total_number' not in representation_ms_info and 'segment_duration' in representation_ms_info:
                                 segment_duration = float_or_none(representation_ms_info['segment_duration'], representation_ms_info['timescale'])
-                                representation_ms_info['total_number'] = int(math.ceil(
-                                    float_or_none(period_duration, segment_duration, default=0)))
+                                representation_ms_info['total_number'] = math.ceil(float_or_none(period_duration, segment_duration, default=0))
                             representation_ms_info['fragments'] = [{
                                 media_location_key: media_template % {
                                     'Number': segment_number,
@@ -3954,14 +3954,18 @@ class InfoExtractor:
     def __init_subclass__(cls, *, plugin_name=None, **kwargs):
         if plugin_name:
             mro = inspect.getmro(cls)
-            super_class = cls.__wrapped__ = mro[mro.index(cls) + 1]
-            cls.PLUGIN_NAME, cls.ie_key = plugin_name, super_class.ie_key
-            cls.IE_NAME = f'{super_class.IE_NAME}+{plugin_name}'
+            next_mro_class = super_class = mro[mro.index(cls) + 1]
+
             while getattr(super_class, '__wrapped__', None):
                 super_class = super_class.__wrapped__
-            setattr(sys.modules[super_class.__module__], super_class.__name__, cls)
-            _PLUGIN_OVERRIDES[super_class].append(cls)
 
+            if not any(override.PLUGIN_NAME == plugin_name for override in plugin_ies_overrides.value[super_class]):
+                cls.__wrapped__ = next_mro_class
+                cls.PLUGIN_NAME, cls.ie_key = plugin_name, next_mro_class.ie_key
+                cls.IE_NAME = f'{next_mro_class.IE_NAME}+{plugin_name}'
+
+                setattr(sys.modules[super_class.__module__], super_class.__name__, cls)
+                plugin_ies_overrides.value[super_class].append(cls)
         return super().__init_subclass__(**kwargs)
 
 
@@ -4017,6 +4021,3 @@ class UnsupportedURLIE(InfoExtractor):
 
     def _real_extract(self, url):
         raise UnsupportedError(url)
-
-
-_PLUGIN_OVERRIDES = collections.defaultdict(list)
