@@ -1037,7 +1037,10 @@ class TwitchStreamIE(TwitchBaseIE):
         self._prefer_source(formats)
 
         view_count = stream.get('viewers')
-        timestamp = unified_timestamp(stream.get('createdAt'))
+        try:
+            timestamp = unified_timestamp(stream.get('createdAt'))
+        except Exception:
+            timestamp = None
 
         sq_user = try_get(gql, lambda x: x[1]['data']['user'], dict) or {}
         uploader = sq_user.get('displayName')
