@@ -57,6 +57,16 @@ class TwitchBaseIE(InfoExtractor):
         return self._configuration_arg(
             'client_id', ['ue6666qo983tsx6so1t0vnawi233wa'], ie_key='Twitch', casesense=True)[0]
 
+    @property
+    def _PLATFORM(self):
+        return self._configuration_arg(
+            'platform', ['web'], ie_key='Twitch', casesense=True)[0]
+
+    @property
+    def _PLAYER_TYPE(self):
+        return self._configuration_arg(
+            'player_type', ['site'], ie_key='Twitch', casesense=True)[0]
+
     def _perform_login(self, username, password):
         def fail(message):
             raise ExtractorError(
@@ -163,16 +173,16 @@ class TwitchBaseIE(InfoExtractor):
               %s(
                 %s: "%s",
                 params: {
-                  platform: "web",
+                  platform: "%s",
                   playerBackend: "mediaplayer",
-                  playerType: "site"
+                  playerType: "%s"
                 }
               )
               {
                 value
                 signature
               }
-            }''' % (method, param_name, video_id),  # noqa: UP031
+            }''' % (method, param_name, video_id, self._PLATFORM, self._PLAYER_TYPE),  # noqa: UP031
         }
         return self._download_base_gql(
             video_id, ops,
@@ -193,7 +203,7 @@ class TwitchBaseIE(InfoExtractor):
                 'allow_audio_only': 'true',
                 'allow_spectre': 'true',
                 'p': random.randint(1000000, 10000000),
-                'platform': 'web',
+                'platform': self._PLATFORM,
                 'player': 'twitchweb',
                 'supported_codecs': 'av1,h265,h264',
                 'playlist_include_framerate': 'true',
