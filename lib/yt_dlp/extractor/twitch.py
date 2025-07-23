@@ -1121,6 +1121,9 @@ class TwitchStreamIE(TwitchVideosBaseIE):
         stream_type = stream.get('type')
         if stream_type in ['rerun', 'live']:
             title += f' ({stream_type})'
+        game_name = stream.get('game', {}).get('name')
+        if game_name:
+            title += f' - {game_name}'
 
         return {
             'id': stream_id,
