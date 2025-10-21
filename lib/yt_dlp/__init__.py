@@ -1,8 +1,8 @@
 import sys
 
-if sys.version_info < (3, 9):
+if sys.version_info < (3, 10):
     raise ImportError(
-        f'You are using an unsupported version of Python. Only Python versions 3.9 and above are supported by yt-dlp')  # noqa: F541
+        f'You are using an unsupported version of Python. Only Python versions 3.10 and above are supported by yt-dlp')  # noqa: F541
 
 __license__ = 'The Unlicense'
 
@@ -61,8 +61,14 @@ from .utils import (
     shell_quote,
     variadic,
     write_string,
+
 )
 from .utils._utils import _UnsafeExtensionError
+from .utils._jsruntime import (
+    BunJsRuntime as _BunJsRuntime,
+    DenoJsRuntime as _DenoJsRuntime,
+    NodeJsRuntime as _NodeJsRuntime,
+)
 from .YoutubeDL import YoutubeDL
 
 
@@ -773,6 +779,10 @@ def parse_options(argv=None):
         else opts.audioformat if (opts.extractaudio and opts.audioformat in FFmpegExtractAudioPP.SUPPORTED_EXTS)
         else None)
 
+    js_runtimes = {
+        runtime.lower(): {'path': path} for runtime, path in (
+            [*arg.split(':', 1), None][:2] for arg in opts.js_runtimes)}
+
     return ParsedOptions(parser, opts, urls, {
         'usenetrc': opts.usenetrc,
         'netrc_location': opts.netrc_location,
@@ -944,6 +954,8 @@ def parse_options(argv=None):
         '_warnings': warnings,
         '_deprecation_warnings': deprecation_warnings,
         'compat_opts': opts.compat_opts,
+        'js_runtimes': js_runtimes,
+        'remote_components': opts.remote_components,
     })
 
 
@@ -974,13 +986,8 @@ def _real_main(argv=None):
 
         try:
             updater = Updater(ydl, opts.update_self)
-            if opts.update_self and updater.update() and actual_use:
-                if updater.cmd:
-                    return updater.restart()
-                # This code is reachable only for zip variant in py < 3.10
-                # It makes sense to exit here, but the old behavior is to continue
-                ydl.report_warning('Restart yt-dlp to use the updated version')
-                # return 100, 'ERROR: The program must exit for the update to complete'
+            if opts.update_self and updater.update() and actual_use and updater.cmd:
+                return updater.restart()
         except Exception:
             traceback.print_exc()
             ydl._download_retcode = 100
@@ -1085,6 +1092,12 @@ def main(argv=None):
 
 
 from .extractor import gen_extractors, list_extractors
+
+# Register JS runtimes
+from .globals import supported_js_runtimes
+supported_js_runtimes.value['deno'] = _DenoJsRuntime
+supported_js_runtimes.value['node'] = _NodeJsRuntime
+supported_js_runtimes.value['bun'] = _BunJsRuntime
 
 __all__ = [
     'YoutubeDL',
