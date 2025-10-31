@@ -39,7 +39,7 @@ class DenoJCP(EJSBaseJCP, BuiltinIEContentProvider):
         yield from super()._iter_script_sources()
         yield ScriptSource.BUILTIN, self._deno_npm_source
 
-    def _deno_npm_source(self, script_type: ScriptType, /) -> Script | None:
+    def _deno_npm_source(self, script_type: ScriptType, /):
         if script_type != ScriptType.LIB:
             return None
         # Deno-specific lib scripts that use Deno NPM imports
@@ -53,8 +53,7 @@ class DenoJCP(EJSBaseJCP, BuiltinIEContentProvider):
             # We may still be able to continue if the npm packages are available/cached
             self._NPM_PACKAGES_CACHED = self._npm_packages_cached(code)
             if not self._NPM_PACKAGES_CACHED:
-                self._report_remote_component_skipped('ejs:npm', 'NPM package')
-                return None
+                return self._skip_component('ejs:npm')
         return Script(script_type, ScriptVariant.DENO_NPM, ScriptSource.BUILTIN, self._SCRIPT_VERSION, code)
 
     def _npm_packages_cached(self, stdin: str) -> bool:
@@ -77,7 +76,7 @@ class DenoJCP(EJSBaseJCP, BuiltinIEContentProvider):
         if self.ie.get_param('nocheckcertificate'):
             options.append('--unsafely-ignore-certificate-errors')
         # XXX: Convert this extractor-arg into a general option if/when a JSI framework is implemented
-        if self.ejs_setting('deno_v8_jitless', ['false']) != ['false']:
+        if self.ejs_setting('jitless', ['false']) != ['false']:
             options.append('--v8-flags=--jitless')
         return self._run_deno(stdin, options)
 

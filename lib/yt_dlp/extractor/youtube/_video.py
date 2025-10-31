@@ -24,6 +24,7 @@ from ._base import (
     _split_innertube_client,
     short_client_name,
 )
+from .jsc._builtin.ejs import _EJS_WIKI_URL
 from .jsc._director import initialize_jsc_director
 from .jsc.provider import JsChallengeRequest, JsChallengeType, NChallengeInput, SigChallengeInput
 from .pot._director import initialize_pot_director
@@ -144,14 +145,13 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
         r'\b(?P<id>vfl[a-zA-Z0-9_-]+)\b.*?\.js$',
     )
     _SUBTITLE_FORMATS = ('json3', 'srv1', 'srv2', 'srv3', 'ttml', 'srt', 'vtt')
-    _DEFAULT_CLIENTS = ('tv', 'web_safari', 'web')
+    _DEFAULT_CLIENTS = ('tv', 'android_sdkless', 'web')
+    _DEFAULT_JSLESS_CLIENTS = ('android_sdkless', 'web_safari', 'web')
     _DEFAULT_AUTHED_CLIENTS = ('tv', 'web_safari', 'web')
     # Premium does not require POT (except for subtitles)
     _DEFAULT_PREMIUM_CLIENTS = ('tv', 'web_creator', 'web')
 
     _GEO_BYPASS = False
-
-    _EJS_WIKI_URL = 'https://github.com/yt-dlp/yt-dlp/wiki/EJS'
 
     IE_NAME = 'youtube'
     _TESTS = [{
@@ -2081,11 +2081,14 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
         Extract signatureTimestamp (sts)
         Required to tell API what sig/player version is in use.
         """
+        CACHE_ENABLED = False  # TODO: enable when preprocessed player JS cache is solved/enabled
+
         player_sts_override = self._get_player_js_version()[0]
         if player_sts_override:
             return int(player_sts_override)
 
-        if sts := traverse_obj(ytcfg, ('STS', {int_or_none})):
+        sts = traverse_obj(ytcfg, ('STS', {int_or_none}))
+        if sts:
             return sts
 
         if not player_url:
@@ -2095,15 +2098,14 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             self.report_warning(error_msg)
             return None
 
-        sts = self._load_player_data_from_cache('sts', player_url)
-        if sts:
+        if CACHE_ENABLED and (sts := self._load_player_data_from_cache('sts', player_url)):
             return sts
 
         if code := self._load_player(video_id, player_url, fatal=fatal):
             sts = int_or_none(self._search_regex(
                 r'(?:signatureTimestamp|sts)\s*:\s*(?P<sts>[0-9]{5})', code,
                 'JS player signature timestamp', group='sts', fatal=fatal))
-            if sts:
+            if CACHE_ENABLED and sts:
                 self._store_player_data_to_cache('sts', player_url, sts)
 
         return sts
@@ -2771,9 +2773,11 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
     def _get_requested_clients(self, url, smuggled_data, is_premium_subscriber):
         requested_clients = []
         excluded_clients = []
+        js_runtime_available = any(p.is_available() for p in self._jsc_director.providers.values())
         default_clients = (
             self._DEFAULT_PREMIUM_CLIENTS if is_premium_subscriber
             else self._DEFAULT_AUTHED_CLIENTS if self.is_authenticated
+            else self._DEFAULT_JSLESS_CLIENTS if not js_runtime_available
             else self._DEFAULT_CLIENTS
         )
         allowed_clients = sorted(
@@ -3322,7 +3326,7 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                     help_message = (
                         'Ensure you have a supported JS Runtime and challenge solver script distribution installed. '
                         'Review any warnings presented before this message. '
-                        f'For more details, refer to  {self._EJS_WIKI_URL}')
+                        f'For more details, refer to  {_EJS_WIKI_URL}')
 
                     if s_challenges:
                         self.report_warning(

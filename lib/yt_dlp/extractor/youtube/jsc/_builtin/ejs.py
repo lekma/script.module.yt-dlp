@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 
     from yt_dlp.extractor.youtube.jsc.provider import JsChallengeRequest
 
+_EJS_WIKI_URL = 'https://github.com/yt-dlp/yt-dlp/wiki/EJS'
+
 
 class ScriptType(enum.Enum):
     LIB = 'lib'
@@ -106,13 +108,13 @@ class EJSBaseJCP(JsChallengeProvider):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._available = True
+        self.ejs_settings = self.ie.get_param('extractor_args', {}).get('youtube-ejs', {})
 
-        # Note: developer use only, intentionally not documented.
+        # Note: The following 3 args are for developer use only & intentionally not documented.
         # - dev: bypasses verification of script hashes and versions.
         # - repo: use a custom GitHub repository to fetch web script from.
         # - script_version: use a custom script version.
         # E.g. --extractor-args "youtube-ejs:dev=true;script_version=0.1.4"
-        self.ejs_settings = self.ie.get_param('extractor_args', {}).get('youtube-ejs', {})
 
         self.is_dev = self.ejs_setting('dev', ['false'])[0] == 'true'
         if self.is_dev:
@@ -160,7 +162,7 @@ class EJSBaseJCP(JsChallengeProvider):
                 player = self._get_player(video_id, player_url)
 
             # NB: This output belongs after the player request
-            self.logger.info(f'Solving JS challenges using {self.PROVIDER_NAME}')
+            self.logger.info(f'Solving JS challenges using {self.JS_RUNTIME_NAME}')
 
             stdin = self._construct_stdin(player, cached, grouped_requests)
             stdout = self._run_js_runtime(stdin)
@@ -212,9 +214,13 @@ class EJSBaseJCP(JsChallengeProvider):
         return self._get_script(ScriptType.CORE)
 
     def _get_script(self, script_type: ScriptType, /) -> Script:
+        skipped_components: list[_SkippedComponent] = []
         for _, from_source in self._iter_script_sources():
             script = from_source(script_type)
             if not script:
+                continue
+            if isinstance(script, _SkippedComponent):
+                skipped_components.append(script)
                 continue
             if not self.is_dev:
                 if script.version != self._SCRIPT_VERSION:
@@ -237,10 +243,16 @@ class EJSBaseJCP(JsChallengeProvider):
             self.logger.debug(
                 f'Using challenge solver {script.type.value} script v{script.version} '
                 f'(source: {script.source.value}, variant: {script.variant.value})')
-            return script
+            break
 
-        self._available = False
-        raise JsChallengeProviderRejectedRequest(f'No usable challenge solver {script_type.value} script available')
+        else:
+            self._available = False
+            raise JsChallengeProviderRejectedRequest(
+                f'No usable challenge solver {script_type.value} script available',
+                _skipped_components=skipped_components or None,
+            )
+
+        return script
 
     def _iter_script_sources(self) -> Generator[tuple[ScriptSource, Callable[[ScriptType], Script | None]]]:
         yield from [
@@ -274,10 +286,9 @@ class EJSBaseJCP(JsChallengeProvider):
             return Script(script_type, ScriptVariant.UNMINIFIED, ScriptSource.BUILTIN, self._SCRIPT_VERSION, code)
         return None
 
-    def _web_release_source(self, script_type: ScriptType, /) -> Script | None:
+    def _web_release_source(self, script_type: ScriptType, /):
         if 'ejs:github' not in (self.ie.get_param('remote_components') or ()):
-            self._report_remote_component_skipped('ejs:github', 'challenge solver script')
-            return None
+            return self._skip_component('ejs:github')
         url = f'https://github.com/{self._REPOSITORY}/releases/download/{self._SCRIPT_VERSION}/{self._MIN_SCRIPT_FILENAMES[script_type]}'
         if code := self.ie._download_webpage_with_retries(
             url, None, f'[{self.logger.prefix}] Downloading challenge solver {script_type.value} script from  {url}',
@@ -305,9 +316,11 @@ class EJSBaseJCP(JsChallengeProvider):
             return False
         return self._available
 
-    def _report_remote_component_skipped(self, component: str, component_description: str):
-        self.logger.warning(
-            f'Remote {component_description} downloads are disabled. '
-            f'This may be required to solve JS challenges using {self.JS_RUNTIME_NAME} JS runtime. '
-            f'You can enable {component_description} downloads with "--remote-components {component}". '
-            f'For more information and alternatives, refer to  {self.ie._EJS_WIKI_URL}')
+    def _skip_component(self, component: str, /):
+        return _SkippedComponent(component, self.JS_RUNTIME_NAME)
+
+
+@dataclasses.dataclass
+class _SkippedComponent:
+    component: str
+    runtime: str
