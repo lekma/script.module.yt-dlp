@@ -2794,6 +2794,14 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                 self.report_warning(f'Skipping unsupported client "{client}"')
             else:
                 requested_clients.append(client)
+
+        if not (requested_clients or excluded_clients) and default_clients == self._DEFAULT_JSLESS_CLIENTS:
+            self.report_warning(
+                f'No supported JavaScript runtime could be found. YouTube extraction without '
+                f'a JS runtime has been deprecated, and some formats may be missing. '
+                f'See  {_EJS_WIKI_URL}  for details on installing one. To silence this warning, '
+                f'you can use  --extractor-args "youtube:player_client=default"', only_once=True)
+
         if not requested_clients:
             requested_clients.extend(default_clients)
         for excluded_client in excluded_clients:
@@ -3258,16 +3266,7 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                     if live_status not in ('is_live', 'post_live'):
                         fmt['available_at'] = available_at
 
-                    if (all_formats or 'dashy' in format_types) and fmt['filesize']:
-                        https_fmts.append({
-                            **fmt,
-                            'format_id': f'{fmt["format_id"]}-dashy' if all_formats else fmt['format_id'],
-                            'protocol': 'http_dash_segments',
-                            'fragments': build_fragments(fmt),
-                        })
-                    if all_formats or 'dashy' not in format_types:
-                        fmt['downloader_options'] = {'http_chunk_size': CHUNK_SIZE}
-                        https_fmts.append(fmt)
+                    https_fmts.append(fmt)
 
                 # Bulk process sig/n handling
                 # Retrieve all JSC Sig and n requests for this player response in one go
@@ -3324,7 +3323,8 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                     # Depending on type of challenge request
 
                     help_message = (
-                        'Ensure you have a supported JS Runtime and challenge solver script distribution installed. '
+                        'Ensure you have a supported JavaScript runtime and '
+                        'challenge solver script distribution installed. '
                         'Review any warnings presented before this message. '
                         f'For more details, refer to  {_EJS_WIKI_URL}')
 
@@ -3342,7 +3342,17 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                             if fmt in https_fmts:
                                 https_fmts.remove(fmt)
 
-                yield from https_fmts
+                for fmt in https_fmts:
+                    if (all_formats or 'dashy' in format_types) and fmt['filesize']:
+                        yield {
+                            **fmt,
+                            'format_id': f'{fmt["format_id"]}-dashy' if all_formats else fmt['format_id'],
+                            'protocol': 'http_dash_segments',
+                            'fragments': build_fragments(fmt),
+                        }
+                    if all_formats or 'dashy' not in format_types:
+                        fmt['downloader_options'] = {'http_chunk_size': CHUNK_SIZE}
+                        yield fmt
 
             yield from process_https_formats()
 
